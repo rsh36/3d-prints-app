@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>3Dプリント自動見積り</title>
+
+<style>
+body{font-family:sans-serif;background:#f2f2f2;margin:0;padding:20px;}
+.card{max-width:420px;margin:auto;background:white;padding:20px;border-radius:12px;box-shadow:0 4px 10px rgba(0,0,0,0.1);}
+h1{text-align:center;font-size:20px;}
+label{display:block;margin-top:12px;font-size:14px;}
+input,select,button{width:100%;margin-top:5px;padding:10px;font-size:16px;border-radius:8px;border:1px solid #ccc;}
+button{background:#4CAF50;color:white;border:none;margin-top:12px;}
+.result{margin-top:15px;font-size:18px;text-align:center;font-weight:bold;}
+#viewer{width:100%;height:300px;background:#eee;border-radius:10px;margin-top:15px;}
+</style>
+</head>
+<body>
+
+<!-- 🔒 パスワード成功後だけ表示 -->
+<div id="app" style="display:none;">
+
+<div class="card">
+<h1>3Dプリント見積り</h1>
+
+<label>利用者ID</label>
+<input id="userId" placeholder="例:R001">
+
+<label>利用回数</label>
+<input id="visit" readonly>
+
+<label>モデル最大サイズ(mm)</label>
+<input id="size" type="number" value="100">
+
+<label>サポート材</label>
+<select id="support"><option>なし</option><option>あり</option></select>
+
+<label>印刷時間(時間)</label>
+<input id="time" type="number" value="5">
+
+<label>使用ポイント</label>
+<input id="usePoints" type="number" value="0">
+
+<button onclick="calculate()">見積り計算</button>
+<button onclick="confirmPrint()">印刷確定</button>
+
+<div class="result" id="result">合計 ¥0</div>
+
+<input type="file" id="stlFile" accept=".stl">
+<div id="viewer"></div>
+</div>
+
+</div>
+
+<!-- 🔒 パスワード認証 -->
+<script>
+const correctPassword = "ryuta3d"; // 好きに変更OK
+const inputPass = prompt("パスワードを入力してください");
+
+if (inputPass === correctPassword) {
+  document.getElementById("app").style.display = "block";
+} else {
+  document.body.innerHTML = "<h1 style='text-align:center;margin-top:50px;'>アクセスできません</h1>";
+}
+</script>
+
+<!-- three.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/loaders/STLLoader.js"></script>
+
+<script>
+const userId=document.getElementById("userId");
+const visitInput=document.getElementById("visit");
+const sizeInput=document.getElementById("size");
+const usePointsInput=document.getElementById("usePoints");
+const stlFile=document.getElementById("stlFile");
+
+// ===== ユーザーデータ読み込み =====
+userId.addEventListener("input",loadUserData);
+function loadUserData(){
+  const id=userId.value;
+  if(!id)return;
+  const visit=Number(localStorage.getItem("visit_"+id)||1);
+  const points=Number(localStorage.getItem("point_"+id)||0);
+  visitInput.value=visit;
+  usePointsInput.max=points;
+}
+
+// ===== 見積り =====
+function calculate(){
+let visit=Number(visitInput.value);
+let size=Number(sizeInput.value);
+let support=document.getElementById("support").value;
+let time=Number(document.getElementById("time").value);
+let usePoints=Number(usePointsInput.value);
+
+let base=visit===1?0:visit===2?50:visit===3?100:visit===4?150:visit===5?200:250;
+let sizeFee=visit>=2?(size<=50?0:size<=100?50:size<=150?100:150):0;
+let supportFee=support==="あり"?50:0;
+let timeFee=time>10?100:0;
+
+let total=base+sizeFee+supportFee+timeFee-usePoints;
+if(total<0)total=0;
+result.textContent="合計 ¥"+total;
+}
+
+// ===== 印刷確定 =====
+function confirmPrint(){
+const id=userId.value;
+if(!id){alert("ID入力して");return;}
+let visit=Number(localStorage.getItem("visit_"+id)||1);
+let points=Number(localStorage.getItem("point_"+id)||0);
+let usePoints=Number(usePointsInput.value);
+
+localStorage.setItem("visit_"+id,visit+1);
+localStorage.setItem("point_"+id,points-usePoints+50);
+
+alert("印刷確定！次回は"+(visit+1)+"回目");
+loadUserData();
+}
+
+// ===== 3D表示 =====
+const viewer=document.getElementById("viewer");
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(60,viewer.clientWidth/viewer.clientHeight,0.1,10000);
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(viewer.clientWidth,viewer.clientHeight);
+renderer.setClearColor(0xeeeeee);
+viewer.appendChild(renderer.domElement);
+
+const controls=new THREE.OrbitControls(camera,renderer.domElement);
+camera.position.set(100,100,100);
+
+scene.add(new THREE.AmbientLight(0xffffff,1.2));
+const d1=new THREE.DirectionalLight(0xffffff,1.5);
+d1.position.set(200,200,200);
+scene.add(d1);
+const d2=new THREE.DirectionalLight(0xffffff,1.0);
+d2.position.set(-200,-100,-200);
+scene.add(d2);
+
+let mesh=null;
+
+stlFile.addEventListener("change",e=>{
+const file=e.target.files[0];
+const reader=new FileReader();
+reader.onload=evt=>{
+const loader=new THREE.STLLoader();
+const geo=loader.parse(evt.target.result);
+geo.computeBoundingBox();
+geo.center();
+
+const box=geo.boundingBox;
+const size=new THREE.Vector3();
+box.getSize(size);
+const maxDim=Math.max(size.x,size.y,size.z);
+sizeInput.value=maxDim.toFixed(1);
+
+if(mesh)scene.remove(mesh);
+mesh=new THREE.Mesh(geo,new THREE.MeshNormalMaterial({side:THREE.DoubleSide}));
+scene.add(mesh);
+
+const dist=maxDim*2.5;
+camera.position.set(dist,dist,dist);
+controls.target.set(0,0,0);
+controls.update();
+};
+reader.readAsArrayBuffer(file);
+});
+
+function animate(){requestAnimationFrame(animate);renderer.render(scene,camera);}
+animate();
+
+window.addEventListener("resize",()=>{
+camera.aspect=viewer.clientWidth/viewer.clientHeight;
+camera.updateProjectionMatrix();
+renderer.setSize(viewer.clientWidth,viewer.clientHeight);
+});
+</script>
+
+</body>
+</html>
